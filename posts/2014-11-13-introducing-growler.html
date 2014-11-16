@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en"> 
+  <head>
+    <meta charset="utf-8" />
+    <title>Ian Duncan - Introducing Growler, a simple HTTP server toolkit</title>
+    <link rel="stylesheet" href="../css/default.css" />
+    <link href="http://fonts.googleapis.com/css?family=Roboto:400,300italic,300,400italic,700,700italic" rel="stylesheet">
+  </head>
+  <body>
+    <div id="header">
+      <div id="logo">
+        <a href="../">Ian Duncan</a>
+      </div>
+      <div id="navigation">
+        <a href="../about.html">About</a>
+        <a href="../contact.html">Contact</a>
+        <a href="../archive.html">Archive</a>
+      </div>
+    </div>
+    
+    <div id="content">
+      <h1>Introducing Growler, a simple HTTP server toolkit</h1>
+<div class="info">
+    Posted on November 13, 2014
+    
+</div>
+
+<p>For the past few years, I’ve always used <code>scotty</code> as my tool of choice when building simple servers for Haskell. However, I’ve come to take issue with some of the design choices that <code>scotty</code> takes, a few of which include:</p>
+<ul>
+<li>rolling its own error mechanism</li>
+<li>The <code>next</code> function, which allows you to switch execution to the next handler that might handle a request.</li>
+<li>odd choices for data types that involved unnecessary amounts of coersion</li>
+<li>always loading request bodies into memory</li>
+<li>perhaps a wee bit <em>too</em> minimalistic</li>
+</ul>
+<p>In light of these issues, I set out to build a toolkit that keeps the best parts of <code>scotty</code> while ameliorating some of the drawbacks that frequently caused me grief and while adding a few features of my own.</p>
+<h2 id="whats-gone">What’s gone</h2>
+<p>Scotty exports a duplicate API for using it with monad transformers (<code>ScottyT</code>) and without (<code>ScottyM</code>). I realize that it’s largely for historical reasons that both versions exist, but it always suffices for me to use the transformer version. If I don’t have a special base monad, I just use IO, which is what <code>ScottyT</code> really does anyways.</p>
+<p>The <code>next</code> function is gone, as I mentioned above. It’s a really bizarre concept to me that you’d have control flow leave off in one request-handling function and start off in a different one. I want all of my logic in one place and to be responsible for crafting my routes in such a way that they don’t overlap. Additionally, the <code>next</code> function implements this control flow transfer by throwing an exception, which is not particularly idiomatic Haskell to me.</p>
+<h2 id="whats-changed">What’s changed</h2>
+<p>The <code>ActionT</code> monad transformer is the <code>HandlerT</code> monad transformer in Growler terminology. I just think the name is more sensible.</p>
+<p><code>param</code> &amp; <code>params</code> don’t read form parameters, just pattern matches &amp; query param matches in the URL. The short explanation is that I prefer leaving it up to the library user to determine whether they want to actually consume the request body or not.</p>
+<p>Headers aren’t coerced into lazy Text values. They are strict ByteStrings in WAI, so using lazy Texts necessitates conversion on the way in and on the way out, which turned out to be relatively expensive for my workloads.</p>
+<p><code>capture</code>, <code>regex</code>, and <code>literal</code> for constructing routes are all implemented in terms of <code>function</code> instead of as intermediate data structures. This provided some modest performance improvements.</p>
+<h2 id="whats-new">What’s new</h2>
+<p>Restructuring the routing gave some leeeway for some new tricks: <code>mount</code> &amp; <code>handlerHook</code>.</p>
+<p><code>mount</code> lets you avoid redeclaring the same base sections of routes in a nicely composable way. As an example, where you would have needed to write:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell">get <span class="st">&quot;/users/:username/settings&quot;</span> userSettingsPage
+get <span class="st">&quot;/users/:username/comments&quot;</span> userCommentsPage
+get <span class="st">&quot;/users/:username&quot;</span>          userInfoPage
+<span class="fu">...</span></code></pre>
+<p>You can now write:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell">mount <span class="st">&quot;/users/:username&quot;</span> <span class="fu">$</span> <span class="kw">do</span>
+  get <span class="st">&quot;/settings&quot;</span> userSettingsPage
+  get <span class="st">&quot;/comments&quot;</span> userCommentsPage
+  get <span class="st">&quot;/&quot;</span>         userInfoPage</code></pre>
+<p>There! That’s a little DRYer.</p>
+<p>The other handy addition is <code>handlerHook</code>, which lets you declare middleware for handlers that’s aware of all of the context provided by your monad transformer stack.</p>
+<p>One way that I currently use this is with <code>mount</code> to enforce authentication for subsections of the site:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell">mount <span class="st">&quot;/admin&quot;</span> <span class="fu">$</span> <span class="kw">do</span>
+  <span class="fu">...</span> <span class="co">-- admin-specific routes</span>
+  handlerHook enforceUserIsAdmin</code></pre>
+<p>The nice thing here is that the middleware is only run on requests in the mount block, instead of on every request across the entire site.</p>
+<h2 id="example-untested">Example (Untested)</h2>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE OverloadedStrings #-}</span>
+<span class="kw">module</span> <span class="dt">Main</span> <span class="kw">where</span>
+
+<span class="kw">import </span><span class="dt">Web.Growler</span>
+
+main <span class="fu">=</span> growl id notFound <span class="fu">$</span> <span class="kw">do</span>
+  get <span class="st">&quot;/&quot;</span> <span class="fu">$</span> text <span class="st">&quot;Hello, world!&quot;</span>
+  mount <span class="st">&quot;/:user&quot;</span> <span class="fu">$</span> <span class="kw">do</span>
+    get <span class="st">&quot;/&quot;</span> (param <span class="st">&quot;user&quot;</span> <span class="fu">&gt;&gt;=</span> text)
+    get <span class="st">&quot;/settings&quot;</span> <span class="fu">$</span> text <span class="st">&quot;This would be a settings page&quot;</span></code></pre>
+<h2 id="i-want-to-use-it">“I want to use it!”</h2>
+<p>Great! It’s still a little rough around the edges, but it’s on <a href="http://hackage.haskell.org/package/growler">Hackage</a>. In particular, the documentation could use some work, but if you’re familiar with Scotty’s idioms, they should more or less translate directly.</p>
+<h2 id="i-want-to-contribute">“I want to contribute!”</h2>
+<p>Please do! You can find the source code on <a href="https://github.com/iand675/growler">GitHub</a>. Feel free to file any issues that you encounter or to submit pull requests.</p>
+
+    </div>
+    <div id="footer">
+      <a href="https://twitter.com/iand675">
+	<i class="icon-twitter"></i>
+      </a>
+      <a href="https://github.com/iand675">
+	<i class="icon-github"></i>
+      </a>
+    </div>
+  </body>
+</html>
