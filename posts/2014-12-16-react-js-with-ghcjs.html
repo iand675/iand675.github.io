@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en"> 
+  <head>
+    <meta charset="utf-8" />
+    <title>Ian Duncan - Using React with GHCJS – Part 1</title>
+    <link rel="stylesheet" href="../css/default.css" />
+    <link href="http://fonts.googleapis.com/css?family=Roboto:400,300italic,300,400italic,700,700italic" rel="stylesheet">
+  </head>
+  <body>
+    <div id="header">
+      <div id="logo">
+        <a href="../">Ian Duncan</a>
+      </div>
+      <div id="navigation">
+        <a href="../about.html">About</a>
+        <a href="../contact.html">Contact</a>
+        <a href="../archive.html">Archive</a>
+      </div>
+    </div>
+    
+    <div id="content">
+      <h1>Using React with GHCJS – Part 1</h1>
+<div class="info">
+    Posted on December 16, 2014
+    
+</div>
+
+<p>I’ve been doing frontend development for a while now. It has a lot of aspects to it that are very appealing. The browser, especially with today’s development tools is one of the most ubiquitous ways out there to introduce people to programming. Instant gratification without any tricky setup makes for a compelling platform. However, anyone who’s ever written code for the browser knows that there are plenty of warts– CSS is a nightmare. JavaScript doesn’t play nicely with true concurrency, has bizarre scoping rules, is loosely typed, and more.</p>
+<p>In any case, I’m not here to rag on JavaScript and CSS. They’re slowly getting some cool features, they’re not going away, and the browser is probably not going to be replaced by dramatically superior technology any time soon. Nevertheless, JavaScript is never gonna be as fun or safe as Haskell is. If I want to use Haskell on the client side, we live in an era where it’s possible! GHCJS is one such tool for compiling Haskell to JavaScript, and it works great. However, it’s currently kinda sparse in terms of frontend-specific libraries that can be used off the shelf.</p>
+<p>So, enter <a href="http://facebook.github.io/react/">React.js</a>! It provides a fast, declarative way of building UI components without having to do too much of the heavy lifting. Why bother wrapping it at all? Why not just build a similar thing in Haskell? Well, there are a lot of perks to using code built by a massive organization like Facebook. I don’t have to really worry about cross-browser compatibility. I don’t have to think too hard about the Virtual DOM diffing algorithms under the hood. I don’t have to write a Chrome plugin to help inspect the rendered Virtual DOM. Facebook and a bajillion other developers out there are taking care of that for me!</p>
+<h3 id="prior-art">Prior Art</h3>
+<p>At <a href="https://circleci.com/">CircleCI</a>, where I currently work, we use <a href="https://github.com/swannodette/om">Om</a> for our frontend. Briefly, Om builds on top of React.js with ClojureScript– it’s partially a straightforward wrapper, partially some unique features. David Nolen has already charted a lot of the territory building Om, so props to him for that. He’s shown that it can be done, and has put a lot of work into it. I wouldn’t have had the idea to build this without him. It’s a great development experience in a number of ways! Nevertheless, I want my type safety, dammit! If I can skip looking at sourcemaps and code that’s been transmogrified into JavaScript trying to figure out what the heck is going on, I’m gonna do it. With some careful thought, compile-time checking ought to help cut back on a lot of the null reference exceptions and other silly bugs that tend to crop up in JavaScript.</p>
+<h2 id="now-for-a-code-sample">Now for a code sample!</h2>
+<p>It’s not too bad for a first pass, but I’m still working on the API. This is just a writeup of my very early results. Some of you who saw my tweet about getting React working with GHCJS might notice that this is a bit uglier than my first example, but I’m having to rejigger some code around to make the interface better in the long term, so this is the mess in-between.</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE OverloadedStrings #-}</span>
+<span class="ot">{-# LANGUAGE DeriveGeneric #-}</span>
+<span class="kw">module</span> <span class="dt">Main</span> <span class="kw">where</span>
+<span class="kw">import </span><span class="dt">Control.Monad.Trans</span>
+<span class="kw">import </span><span class="dt">Control.Lens</span> <span class="kw">hiding</span> (createClass)
+<span class="kw">import </span><span class="dt">Data.Aeson.Lens</span>
+<span class="kw">import </span><span class="dt">Data.Maybe</span>
+<span class="kw">import </span><span class="dt">Data.Text</span> (<span class="dt">Text</span>)
+<span class="kw">import </span><span class="dt">GHC.Generics</span>
+<span class="kw">import </span><span class="dt">GHCJS.Foreign</span>
+<span class="kw">import </span><span class="dt">GHCJS.DOM</span>
+<span class="kw">import </span><span class="dt">GHCJS.DOM.Document</span>
+<span class="kw">import </span><span class="dt">GHCJS.DOM.NodeList</span>
+<span class="kw">import </span><span class="dt">GHCJS.DOM.Types</span> <span class="kw">hiding</span> (<span class="dt">Text</span>)
+<span class="kw">import </span><span class="dt">React</span>
+<span class="kw">import </span><span class="dt">React.Attributes</span>
+<span class="kw">import </span><span class="dt">React.DOM</span>
+
+<span class="ot">helloComponent ::</span> <span class="dt">ComponentSpecification</span> <span class="dt">IO</span> props state
+helloComponent <span class="fu">=</span> component render <span class="fu">&amp;</span> displayName <span class="fu">?~</span> <span class="st">&quot;Hello&quot;</span>
+  <span class="kw">where</span>
+    render <span class="fu">=</span> <span class="kw">do</span>
+      ps <span class="ot">&lt;-</span> currentProps
+      nameRef <span class="ot">&lt;-</span> liftIO <span class="fu">$</span> getPropMaybe (<span class="st">&quot;name&quot;</span><span class="ot"> ::</span> <span class="dt">Text</span>) ps
+      <span class="kw">let</span> name <span class="fu">=</span> fromMaybe <span class="st">&quot;World&quot;</span> <span class="fu">$</span> fmap fromJSString nameRef
+      return <span class="fu">$</span> div_ noProps [str_ <span class="st">&quot;Hello &quot;</span>, str_ name, str_ <span class="st">&quot;!&quot;</span>]
+
+main <span class="fu">=</span> <span class="kw">do</span>
+  <span class="co">-- Yes, I'm a terrible person for not having total pattern</span>
+  <span class="co">-- matching. But if you don't have access to the DOM, this</span>
+  <span class="co">-- isn't a fun example anyways.</span>
+  (<span class="dt">Just</span> doc) <span class="ot">&lt;-</span> currentDocument
+  (<span class="dt">Just</span> b) <span class="ot">&lt;-</span> documentGetBody doc
+  runReact <span class="fu">$</span> <span class="kw">do</span>
+    hello <span class="ot">&lt;-</span> createClass helloComponent
+    renderOn (castToElement b) <span class="fu">$</span> div_ (props id)
+      [ elem_ <span class="fu">$</span>
+          createElement hello
+            (props <span class="fu">$</span> prop <span class="st">&quot;name&quot;</span> <span class="fu">?~</span> (toJSString (<span class="st">&quot;Ian&quot;</span><span class="ot"> ::</span> <span class="dt">Text</span>)))
+      ]
+  return ()</code></pre>
+<h2 id="ghcjs-is-a-little-raw.-its-still-amazing-though.">GHCJS is a little raw. It’s still amazing though.</h2>
+<p>I can’t stress enough how much GHCJS seems to handle already. I can pretty much <code>cabal install</code> anything that doesn’t have underlying native code dependencies and it just works.</p>
+<p>Want to use <code>lens</code>, or <code>pipes</code>, or <code>conduit</code>? How about <code>aeson</code>? <code>stm</code>? It all seems to work.</p>
+<p>Also, shout out to luite (Luite Stegeman)– he’s the fellow responsible for building a lot of GHCJS in the first place, and he’s been really helpful to me in the IRC channel while I’ve been figuring things out.</p>
+<p>Nevertheless, GHCJS has a few downsides. I have no doubt that most of these are probably going to be ameliorated with time, but I want to build incredible things with Haskell in the browser <em>now</em>, so I have to figure out workarounds in the meantime:</p>
+<h3 id="no-way-to-convert-a-stableptr-to-a-jsref">No way to convert a <code>StablePtr</code> to a <code>JSRef</code></h3>
+<p>Workaround: <code>MVar</code>s can be converted to <code>JSRef</code>s. Use them instead for the time being.</p>
+<h3 id="no-built-in-way-to-return-a-value-from-a-haskell-callback-to-javascript.">No built-in way to return a value from a Haskell callback to Javascript.</h3>
+<p>This is partially by design, since it’s possible for the GHCJS runtime to become blocked while lazily evaluating something with a data dependency that isn’t available yet. As a concrete example, if a lazy <code>ByteString</code> thunk isn’t forced yet because the data depends on the result of an AJAX call, what do you do when you want to return that result into JavaScript land? You can’t block, since JavaScript doesn’t have a mechanism to suspend a computation and come back to it. Best case scenario, you can return a result if you actually have one, and return a fallback value or throw a JavaScript exception otherwise.</p>
+<p>Here’s what that can look like in practice.</p>
+<p>In JavaScript:</p>
+<pre class="sourceCode javascript"><code class="sourceCode javascript"><span class="kw">function</span> <span class="fu">reactWrapCallback</span> (cb) {
+  <span class="kw">return</span> <span class="kw">function</span> () {
+    <span class="co">// capture proper this in order to access component api</span>
+    <span class="kw">var</span> that = <span class="kw">this</span>;
+    <span class="co">// pass obj in and set the result on it inside of the</span>
+    <span class="co">// Haskell code.</span>
+    <span class="kw">var</span> obj = {};
+    <span class="kw">var</span> result = <span class="fu">cb</span>(that, obj);
+    <span class="co">// if the result could be fully evaluated without</span>
+    <span class="co">// blocking, you get a null back.</span>
+    <span class="kw">if</span> (result === <span class="kw">null</span>) {
+      <span class="co">// take the intended result and</span>
+      <span class="co">// return it. Make sure it's set</span>
+      <span class="co">// on the Haskell side.</span>
+      <span class="kw">return</span> <span class="ot">obj</span>.<span class="fu">result</span>;
+    }
+    <span class="kw">else</span> {
+      <span class="kw">throw</span> <span class="st">&quot;Operation blocked&quot;</span>;
+    }
+  };
+}</code></pre>
+<p>In Haskell:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell">foreign <span class="kw">import </span>javascript unsafe &quot;reactWrapCallback($1)&quot;
+<span class="ot">  reactWrapCallback ::</span> <span class="dt">JSFun</span> (<span class="dt">JSRef</span> b <span class="ot">-&gt;</span> <span class="dt">JSRef</span> a <span class="ot">-&gt;</span> <span class="dt">IO</span> ())
+                    <span class="ot">-&gt;</span> <span class="dt">IO</span> (<span class="dt">JSFun</span> (<span class="dt">IO</span> (<span class="dt">JSRef</span> a)))
+
+wrapCallback c <span class="fu">=</span> <span class="kw">do</span>
+  cb <span class="ot">&lt;-</span> syncCallback2 <span class="dt">AlwaysRetain</span> <span class="dt">False</span> <span class="fu">$</span> \this x <span class="ot">-&gt;</span> <span class="kw">do</span>
+    (<span class="dt">Element</span> res) <span class="ot">&lt;-</span> runReaderT (c <span class="fu">^.</span> render) this
+    setProp (<span class="st">&quot;result&quot;</span><span class="ot"> ::</span> <span class="dt">JSString</span>) res x
+  w <span class="ot">&lt;-</span> reactWrapCallback cb 
+  return (w, cb)</code></pre>
+<h3 id="converting-haskell-functions-to-jsfuns-requires-determining-a-retention-strategy.">Converting Haskell functions to <code>JSFun</code>s requires determining a <a href="https://github.com/ghcjs/ghcjs-base/blob/master/GHCJS/Foreign.hs#L106">retention strategy</a>.</h3>
+<p>You’ll note in the above example the use of <code>syncCallback2</code> and the <code>AlwaysRetain</code> argument. If you don’t retain a callback, weak references &amp; <code>MVars</code> aren’t kept alive in some circumstances. You can read the docs for more info, but it’s a hard choice to make– I’m leaning towards using AlwaysRetain right now because it makes the code more general, but cleaning up is tough. I’m currently experimenting with using the <code>SafeT</code> monad from <code>pipes-safe</code> to register finalizers that are guaranteed to be run once the react code is done running (and can optionally be run sooner), but I’m still not sure whether it’s the way to go.</p>
+<p>On the one hand, it’s cool to have the flexibility, but on the other hand it’s kind of hard to know when to release retained functions. In the case of React, I don’t have a good answer yet for when and how to release the functions for event handler props (e.g. <code>onClick</code>). Since they can be added &amp; removed between in any of the component specification callbacks (<code>componentWillMount</code>, etc.), I’m not sure where to clean them up.</p>
+<p>I suspect that I’ll have to resort to a reference counting mechanism to release them if there don’t appear to be any components currently using them. If anyone has thoughts on this, please comment!</p>
+<h3 id="converting-data-types-to-jsrefs-is-a-rather-manual-process-still">Converting data types to JSRefs is a rather manual process still</h3>
+<p>In the magical year 20XX, I bet we’ll just be able to call <code>ToJSRef</code> on anything without exotic types and it’ll just work. If your data type is an instance of <code>ToJSON</code> &amp; <code>FromJSON</code>, you can pretty much already do this. I don’t really see there being any long-term issues here, it’s just an area that needs an enterprising individual to write more instances and submit PRs to ghcjs-base. That probably means me, since I’m the one griping about it :)</p>
+<h3 id="the-generated-code-starts-off-pretty-big.">The generated code starts off pretty big.</h3>
+<p>This isn’t really a huge problem. While the code starts off as around 1 MB unminified, running it through the Google Closure Compiler and serving it gzipped brings it down to a manageable 170 kB or so, React included. Granted, there’s more code to be written, so that’s not a hard number, but it’s not too bad!</p>
+<h2 id="roadmap">Roadmap</h2>
+<p>As it currently stands, I’m not trying to implement Om for Haskell just yet. I’m primarily interested in getting a wrapper built that stays true to React’s API while also being idiomatic Haskell. I know that there are a ton of smart people in the Haskell community that could build neat abstractions on top of this, so I don’t want to close off any of React’s API from use.</p>
+<h2 id="in-closing">In closing</h2>
+<p>I’m looking forward to blogging some of the challenges that I work through while building this. Hopefully my solutions will come in handy for other intrepid souls, or you can suggest better ways of doing things.</p>
+<p>In part 2, I’ll have some integrated examples and talk about more of the design challenges. Stay tuned!</p>
+<h2 id="addendum-help-a-fellow-haskeller-out">Addendum: Help a fellow Haskeller out!</h2>
+<p>Here’s the short list of what I could use help with:</p>
+<ul>
+<li>Figuring out how to clean up event handler functions properly (as mentioned previously)</li>
+<li>I really want to make the syntax for the DOM trees identical to that of Chris Done’s Lucid templating library. I don’t have the ability to just smash a bunch of <code>Builder</code>s together though, so advice on how to implement a visually similar Monad would be appreciated. I’ve explored a few options, but it’s made my head hurt a bit so far.</li>
+</ul>
+<p>It’s a reasonably big undertaking to make this thing pleasant to use, to make sure that I’m not introducing memory leaks, and to keep things as type-safe as possible while doing so. Given enough man-hours, I can do it by myself, but I’d love for some other people to help dog-food it with me and get it stabilized. Go to GitHub, give the code a try, file some issues, and make some pull requests!</p>
+<p>Find the code here: <iframe src="http://ghbtns.com/github-btn.html?user=iand675&repo=ghcjs-react&type=fork&count=true" allowtransparency="true" frameborder="0" scrolling="0" width="62" height="20"></iframe></p>
+
+<hr>
+<div id="social_stuff">
+  <a href="https://twitter.com/iand675" class="twitter-follow-button" data-show-count="false">Follow @iand675</a>
+  <script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src=p+'://platform.twitter.com/widgets.js';fjs.parentNode.insertBefore(js,fjs);}}(document, 'script', 'twitter-wjs');</script>
+  <a href="https://twitter.com/share" class="twitter-share-button" data-via="iand675">Tweet</a>
+  <script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src=p+'://platform.twitter.com/widgets.js';fjs.parentNode.insertBefore(js,fjs);}}(document, 'script', 'twitter-wjs');</script>
+</div>
+<hr>
+<div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES: EDIT BEFORE PASTING INTO YOUR WEBPAGE * * */
+    var disqus_shortname = 'iankduncan'; // required: replace example with your forum shortname
+    var disqus_title = 'Using React with GHCJS – Part 1';
+    var disqus_url = 'https://iankduncan.com/posts/2014-12-16-react-js-with-ghcjs.html';
+
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+    
+
+    </div>
+    <div id="footer">
+      <a href="mailto:ian@iankduncan.com">
+        <i class="icon-mail"></i>
+      </a>
+      <a href="https://twitter.com/iand675">
+	<i class="icon-twitter"></i>
+      </a>
+      <a href="https://github.com/iand675">
+	<i class="icon-github"></i>
+      </a>
+      <a href="../atom.xml">
+        <i class="icon-feed"></i>
+      </a>
+    </div>
+  </body>
+</html>
